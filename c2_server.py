@@ -14,11 +14,6 @@ def localhost_only():
         from flask import abort
         abort(403)
 
-# -------------------------------------------------------
-# Target configuration
-# os: "linux" uses sudo bash -c wrapper
-# os: "windows" uses cmd.exe /c wrapper
-# -------------------------------------------------------
 TARGETS = {
     # Linux - 10.111.1.x
     "shellphone":    {"ip": "10.111.1.1", "service": "SMB",                   "os": "linux"},
