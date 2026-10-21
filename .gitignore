@@ -1,6 +1,7 @@
 # Karen setup tools 
-./Karen/install_postgres.sh
-./Karen/inventory.ini
-./Karen/REAL_inventory.ini
-./Karen/test_persistence.ps1
-./Karen/tool_doc_karen_windows.md
+/install_postgres.sh
+/inventory.ini
+/REAL_inventory.ini
+/test_persistence.ps1
+/tool_doc_karen_windows.md
+/scripts/
