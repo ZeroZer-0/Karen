@@ -34,19 +34,20 @@
         reboot_timeout: 300
       when: dotnet_install.reboot_required | default(false)
 
-    - name: Install Chocolatey
-      win_shell: |
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-      args:
-        creates: 'C:\ProgramData\chocolatey\bin\choco.exe'
+    - name: Download PostgreSQL installer
+      win_get_url:
+        url: "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64.exe"
+        dest: 'C:\Windows\Temp\pg_install.exe'
 
-    - name: Install PostgreSQL via Chocolatey
-      win_chocolatey:
-        name: postgresql
-        state: present
-        params: "/Password:postgres"
+    - name: Install PostgreSQL silently
+      win_command: >
+        C:\Windows\Temp\pg_install.exe
+        --mode unattended
+        --superpassword postgres
+        --serverport 5432
+        --datadir "C:\Program Files\PostgreSQL\16\data"
+      args:
+        creates: 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe'
 
     - name: Find PostgreSQL bin path
       win_shell: |
