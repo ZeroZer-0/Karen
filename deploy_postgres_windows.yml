@@ -46,8 +46,10 @@
         --superpassword postgres
         --serverport 5432
         --datadir "C:\Program Files\PostgreSQL\16\data"
+        --install_runtimes 0
       args:
         creates: 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe'
+      ignore_errors: yes
 
     - name: Find PostgreSQL bin path
       win_shell: |
