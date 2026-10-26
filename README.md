@@ -4,6 +4,12 @@ PostgreSQL-based C2 backdoor and service disruption toolkit for Windows and Linu
 
 ---
 
+## How to connect
+This tool was made with the idea that only a single user will or could be on it. Because of that, you can't connect to this tool unless you are on the box running the server. If you are on the host box, simply go to http://127.0.0.1:9000.
+The victim's boxes are agnostic to what server is trying to use them. Because of this, while using multiple hosts at the same time could be problematic, simply starting the server on another box after shutting down the old one should have no issues, even when changing the IP of the server.
+
+---
+
 ## What It Does
 
 Karen has two independent functions:
