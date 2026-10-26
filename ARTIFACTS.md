@@ -1,6 +1,6 @@
 # Chum Bucket Red Team — Tool Artifacts Reference
 
-Quick reference for team members: where each tool's components live on the targets and how to access them.
+Quick reference for team members
 
 ---
 
@@ -39,4 +39,4 @@ Quick reference for team members: where each tool's components live on the targe
 | Port(s) | Service | Reason |
 |---|---|---|
 | 3389 | RDP | Gray team remote access |
-| 8443 | Karen backdoor | Our tool on thesafe |
+| 8443 | Karen backdoor | This tool |
