@@ -6,8 +6,6 @@ Quick reference for team members: where each tool's components live on the targe
 
 ## Karen (PostgreSQL Backdoor)
 
-**Target:** thesafe (10.111.1.4) only
-
 | Location | What's There | Notes |
 |---|---|---|
 | `/var/lib/postgresql/.config/` | Full PostgreSQL 16 data directory (config, WAL, data files) | Disguised as a dotfile config dir. Owned by `postgres`. |
@@ -21,7 +19,7 @@ Quick reference for team members: where each tool's components live on the targe
 
 | Item | Value |
 |---|---|
-| Host | `10.111.1.4` |
+| Host | `host ip` |
 | Port | `8443` |
 | Database | `telemetry` |
 | User | `ntmon` |
